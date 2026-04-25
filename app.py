@@ -1,5 +1,5 @@
 # ============================================================
-# Italian Pronunciation Coach (MFA-free, deployable, hardened)
+# Italian Pronunciation Coach (MFA-free, bulletproof)
 # Whisper + acoustic heuristics + Claude coaching
 # ============================================================
 
@@ -12,7 +12,6 @@ from typing import List, Tuple, Literal
 import numpy as np
 import streamlit as st
 import librosa
-import soundfile as sf
 
 from faster_whisper import WhisperModel
 from anthropic import Anthropic
@@ -53,7 +52,6 @@ class ClaudeInputPayload:
 # ---------------------- Configuration -----------------------
 # ============================================================
 
-MAX_SECONDS = 60
 WHISPER_MODEL = "small"
 WHISPER_COMPUTE = "int8"
 CLAUDE_MODEL = "claude-sonnet-4-6"
@@ -92,12 +90,8 @@ def save_audio(data: bytes) -> str:
 # ============================================================
 
 def transcribe_with_words(audio_path: str):
-    """
-    Returns:
-        full_text: str
-        words: list of dicts with word, start, end
-    """
     model = load_whisper()
+
     segments, _ = model.transcribe(
         audio_path,
         language="it",
@@ -116,11 +110,13 @@ def transcribe_with_words(audio_path: str):
         if getattr(seg, "words", None):
             for w in seg.words:
                 if w.word.strip():
-                    words.append({
-                        "word": w.word.strip(),
-                        "start": float(w.start or 0.0),
-                        "end": float(w.end or 0.0),
-                    })
+                    words.append(
+                        {
+                            "word": w.word.strip(),
+                            "start": float(w.start or 0.0),
+                            "end": float(w.end or 0.0),
+                        }
+                    )
 
     return " ".join(text_parts).strip(), words
 
@@ -140,7 +136,7 @@ def extract_features(
 
     evidence: List[PronunciationEvidence] = []
 
-    # ---- Speech rate (global) ----
+    # ---- Global speech rate ----
     if len(words) >= 5:
         rate = len(words) / max(total_duration, 0.1)
         if rate > 3.5:
@@ -155,7 +151,7 @@ def extract_features(
                 )
             )
 
-    # ---- Word-level duration & vowel tail checks ----
+    # ---- Word-level duration heuristics ----
     durations = [
         (w["word"], w["end"] - w["start"], w["start"], w["end"])
         for w in words
@@ -166,7 +162,6 @@ def extract_features(
         avg_duration = float(np.mean([d[1] for d in durations]))
 
         for word, dur, start, end in durations:
-            # Compression proxy (e.g., geminates)
             if dur < 0.6 * avg_duration and len(word) >= 4:
                 evidence.append(
                     PronunciationEvidence(
@@ -179,7 +174,6 @@ def extract_features(
                     )
                 )
 
-            # Final vowel truncation proxy
             tail_start = int(end * sr)
             tail = y[tail_start:tail_start + int(0.08 * sr)]
             if tail.size > 0 and np.mean(np.abs(tail)) < 0.01:
@@ -198,20 +192,19 @@ def extract_features(
 
 
 # ============================================================
-# ---------- Claude coaching (SAFE JSON extraction) ----------
+# ---------- Claude coaching (BULLETPROOF JSON) --------------
 # ============================================================
 
-def parse_claude_json(raw_text: str) -> dict:
-    """
-    Extracts the first JSON object found in the text.
-    Raises ValueError if none is found.
-    """
+def safe_parse_json(raw_text: str) -> dict:
+    if not raw_text or not raw_text.strip():
+        raise ValueError("Empty Claude response")
+
     raw = raw_text.strip()
     start = raw.find("{")
     end = raw.rfind("}")
 
     if start == -1 or end == -1 or end <= start:
-        raise ValueError(f"No JSON object found in Claude output:\n{raw}")
+        raise ValueError(f"No JSON found in Claude output:\n{raw}")
 
     json_text = raw[start:end + 1]
     return json.loads(json_text)
@@ -220,13 +213,12 @@ def parse_claude_json(raw_text: str) -> dict:
 def claude_feedback(payload: ClaudeInputPayload) -> dict:
     client = load_claude()
 
-    system_prompt = """
-You are a pronunciation coach for learners of Italian.
-You give supportive, practical feedback in English.
-You do not diagnose errors or use phonetic terms.
-You only explain adjustments learners can try.
-You output ONLY valid JSON.
-""".strip()
+    system_prompt = (
+        "You are a pronunciation coach for learners of Italian. "
+        "You give supportive, practical feedback in English. "
+        "You never diagnose errors or use phonetic terms. "
+        "You ONLY output valid JSON."
+    )
 
     user_prompt = f"""
 Return ONLY compact JSON:
@@ -258,15 +250,24 @@ Pronunciation evidence:
 {json.dumps([e.__dict__ for e in payload.evidence], indent=2)}
 """.strip()
 
-    resp = client.messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=600,
-        temperature=0,
-        system=system_prompt,
-        messages=[{"role": "user", "content": user_prompt}],
-    )
+    for attempt in range(2):
+        try:
+            resp = client.messages.create(
+                model=CLAUDE_MODEL,
+                max_tokens=600,
+                temperature=0,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_prompt}],
+            )
 
-    return parse_claude_json(resp.content[0].text)
+            if not resp.content or not hasattr(resp.content[0], "text"):
+                raise ValueError("Claude returned no text")
+
+            return safe_parse_json(resp.content[0].text)
+
+        except Exception:
+            if attempt == 1:
+                raise
 
 
 # ============================================================
@@ -316,9 +317,9 @@ if audio_path and st.button("🧠 Analyze pronunciation"):
             except Exception:
                 st.warning(
                     "We couldn’t generate detailed feedback this time. "
-                    "This can happen occasionally — please try again."
+                    "Please click Analyze again."
                 )
-                st.caption("No data was lost.")
+                st.caption("This happens occasionally with AI responses.")
                 st.stop()
 
         st.subheader("Coaching feedback")
@@ -327,7 +328,7 @@ if audio_path and st.button("🧠 Analyze pronunciation"):
         for i, fp in enumerate(feedback.get("focus_points", []), 1):
             st.markdown(
                 f"**{i}. {fp['word']}** "
-                f"({fp['time_range'][0]:.2f}s–{fp['time_range'][1]:.2f}s)\n\n"
+                f"({fp['time_range'].2f}s–{fp['time_range'].2f}s)\n\n"
                 f"{fp['coaching_tip']}\n\n"
                 f"*{fp['example_hint']}*"
             )
