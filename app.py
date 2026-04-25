@@ -1,5 +1,5 @@
 # ============================================================
-# Italian Pronunciation Coach (MFA-free, deployable)
+# Italian Pronunciation Coach (MFA-free, deployable, hardened)
 # Whisper + acoustic heuristics + Claude coaching
 # ============================================================
 
@@ -126,7 +126,7 @@ def transcribe_with_words(audio_path: str):
 
 
 # ============================================================
-# ------------- acoustic heuristics (MFA-free) ---------------
+# -------- acoustic heuristics (MFA-free, conservative) ------
 # ============================================================
 
 def extract_features(
@@ -155,7 +155,7 @@ def extract_features(
                 )
             )
 
-    # ---- Word-level checks ----
+    # ---- Word-level duration & vowel tail checks ----
     durations = [
         (w["word"], w["end"] - w["start"], w["start"], w["end"])
         for w in words
@@ -163,10 +163,10 @@ def extract_features(
     ]
 
     if durations:
-        avg_duration = np.mean([d[1] for d in durations])
+        avg_duration = float(np.mean([d[1] for d in durations]))
 
         for word, dur, start, end in durations:
-            # Possible geminate proxy: unusually short word
+            # Compression proxy (e.g., geminates)
             if dur < 0.6 * avg_duration and len(word) >= 4:
                 evidence.append(
                     PronunciationEvidence(
@@ -198,8 +198,24 @@ def extract_features(
 
 
 # ============================================================
-# ---------------- Claude coaching output --------------------
+# ---------- Claude coaching (SAFE JSON extraction) ----------
 # ============================================================
+
+def parse_claude_json(raw_text: str) -> dict:
+    """
+    Extracts the first JSON object found in the text.
+    Raises ValueError if none is found.
+    """
+    raw = raw_text.strip()
+    start = raw.find("{")
+    end = raw.rfind("}")
+
+    if start == -1 or end == -1 or end <= start:
+        raise ValueError(f"No JSON object found in Claude output:\n{raw}")
+
+    json_text = raw[start:end + 1]
+    return json.loads(json_text)
+
 
 def claude_feedback(payload: ClaudeInputPayload) -> dict:
     client = load_claude()
@@ -250,7 +266,7 @@ Pronunciation evidence:
         messages=[{"role": "user", "content": user_prompt}],
     )
 
-    return json.loads(resp.content[0].text)
+    return parse_claude_json(resp.content[0].text)
 
 
 # ============================================================
@@ -295,7 +311,15 @@ if audio_path and st.button("🧠 Analyze pronunciation"):
         payload = ClaudeInputPayload(level=level, evidence=evidence)
 
         with st.spinner("Generating coaching feedback…"):
-            feedback = claude_feedback(payload)
+            try:
+                feedback = claude_feedback(payload)
+            except Exception:
+                st.warning(
+                    "We couldn’t generate detailed feedback this time. "
+                    "This can happen occasionally — please try again."
+                )
+                st.caption("No data was lost.")
+                st.stop()
 
         st.subheader("Coaching feedback")
         st.write(feedback.get("overall_feedback", ""))
