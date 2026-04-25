@@ -327,8 +327,8 @@ if audio_path and st.button("🧠 Analyze pronunciation"):
 
         for i, fp in enumerate(feedback.get("focus_points", []), 1):
             st.markdown(
-                f"**{i}. {fp['word']}** "
-                f"({fp['time_range'].2f}s–{fp['time_range'].2f}s)\n\n"
-                f"{fp['coaching_tip']}\n\n"
-                f"*{fp['example_hint']}*"
-            )
+    f"**{i}. {fp['word']}** "
+    f"({fp['time_range'][0]:.2f}s–{fp['time_range'][1]:.2f}s)\n\n"
+    f"{fp['coaching_tip']}\n\n"
+    f"*{fp['example_hint']}*"
+        )
