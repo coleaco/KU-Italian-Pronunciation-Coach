@@ -155,7 +155,6 @@ def extract_segmental_features(
     audio_path: str,
     words: List[dict],
 ) -> List[PronunciationEvidence]:
-
     y, sr = librosa.load(audio_path, sr=None)
     evidence: List[PronunciationEvidence] = []
 
@@ -189,20 +188,19 @@ def extract_segmental_features(
                     time_range=(w["start"], w["end"]),
                 )
             )
-            return evidence  # Only one segmental item per utterance
+            return evidence  # only one item per utterance
 
     # ---------- STRESS CLARITY HEURISTIC ----------
     for w in words:
         dur = w["end"] - w["start"]
-        if dur < 0.45 or w["word"] in GEMINATE_WORDS:
+        if dur < 0.60 or w["word"] in GEMINATE_WORDS:
             continue
 
-        # Slice audio into 3 equal temporal parts
         start_idx = int(w["start"] * sr)
         end_idx = int(w["end"] * sr)
         segment = y[start_idx:end_idx]
 
-        if len(segment) < sr * 0.3:
+        if len(segment) < sr * 0.4:
             continue
 
         slices = np.array_split(segment, 3)
@@ -242,7 +240,7 @@ def safe_parse_json(raw_text: str) -> dict:
     end = raw.rfind("}")
 
     if start == -1 or end == -1 or end <= start:
-        raise ValueError(f"No JSON found in Claude output:\n{raw}")
+        raise ValueError("No JSON found in Claude output")
 
     return json.loads(raw[start:end + 1])
 
@@ -361,7 +359,20 @@ if audio_path and st.button("🧠 Analyze pronunciation"):
         for i, fp in enumerate(feedback.get("focus_points", []), 1):
             st.markdown(
                 f"**{i}. {fp['word']}** "
-                f"({fp['time_range'][0]:.2f}s–{fp['time_range'][1]:.2f}s)\n\n"
+                f"({fp['time_range'].2f}s–{fp['time_range'].2f}s)\n\n"
                 f"{fp['coaching_tip']}\n\n"
                 f"*{fp['example_hint']}*"
             )
+
+# ============================================================
+# ---------------------- Footer block -------------------------
+# ============================================================
+
+st.markdown("---")
+
+st.markdown(
+    """
+**How to use this tool**
+This tool listens for a few key features of Italian pronunciation that make speech sound clearer and, well, more Italian! It focuses on **double consonants** (like *tt, ll, nn*), checking whether words sound heavy enough in the middle, and on **stress clarity** in longer words, making sure one syllable stands out instead of everything sounding flat. When it gives feedback, it usually highlights **one small adjustment** you can try right away. If there’s no feedback, that’s a good sign—your pronunciation was clear enough for this level. Features like open/closed vowels or the rolled r are not assessed in this version because these sounds can't be evaluated reliably without advanced tools.
+"""
+)
