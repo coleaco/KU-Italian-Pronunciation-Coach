@@ -75,17 +75,15 @@ GEMINATE_WORDS = {
 }
 
 FOOTER_TEXT = (
-    "**How to use this tool**  \n"
     "This app listens for a few key features of Italian pronunciation that make "
-    "speech sound clearer and more natural, especially things your instructor would "
-    "likely correct in class. It focuses on **double consonants** (like tt, ll, nn), "
-    "checking whether words sound heavy enough in the middle, and on **stress clarity** "
-    "in longer words, making sure one syllable stands out instead of everything "
-    "sounding flat. When it gives feedback, it usually highlights **one small adjustment** "
-    "you can try right away. If there is no feedback, that is a good sign - your "
-    "pronunciation was clear enough for this level. The app does not currently look at "
-    "features like open or closed vowels or the rolled r, because they cannot be "
-    "evaluated reliably without advanced tools."
+    "speech sound clearer and, well, more Italian! It focuses on **double consonants** "
+    "(like *tt, ll, nn*), checking whether words sound heavy enough in the middle, and "
+    "on **stress clarity** in longer words, making sure one syllable stands out instead "
+    "of everything sounding flat. When it gives feedback, it usually highlights "
+    "**one small adjustment** you can try right away. If there is no feedback, that is a "
+    "good sign - your pronunciation was clear enough for this level. The app does not "
+    "currently look at features like open or closed vowels or the rolled r because they "
+    "cannot be evaluated reliably without advanced tools."
 )
 
 
