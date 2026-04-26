@@ -1,6 +1,6 @@
 # ============================================================
-# Italian Pronunciation Coach (MFA-free, bulletproof)
-# Whisper + acoustic heuristics + Claude coaching
+# Italian Pronunciation Coach — Segmental-Focused (MFA-free)
+# Geminate consonants + stress clarity
 # ============================================================
 
 import os
@@ -23,12 +23,11 @@ from streamlit_mic_recorder import mic_recorder
 # ============================================================
 
 FeatureType = Literal[
-    "word_duration",
-    "speech_rate",
-    "final_vowel",
+    "geminate_weight",
+    "stress_clarity",
 ]
 
-Severity = Literal["low", "medium", "high"]
+Severity = Literal["low", "medium"]
 LearnerLevel = Literal["Beginner", "Intermediate", "Advanced"]
 
 
@@ -55,6 +54,35 @@ class ClaudeInputPayload:
 WHISPER_MODEL = "small"
 WHISPER_COMPUTE = "int8"
 CLAUDE_MODEL = "claude-sonnet-4-6"
+
+# High-frequency Italian geminate-bearing words (extendable)
+GEMINATE_WORDS = {
+    # Nouns
+    "anno", "anni",
+    "notte", "notti",
+    "attimo", "attimi",
+    "penna", "penne",
+    "palla", "palle",
+    "tetto", "tetti",
+    "gonna", "gonne",
+    "nonno", "nonni",
+    "mamma", "mamme",
+
+    # Adjectives
+    "bello", "bella", "belli", "belle",
+    "tutto", "tutta", "tutti", "tutte",
+    "cattivo", "cattiva", "cattivi", "cattive",
+    "piccolo", "piccola", "piccoli", "piccole",
+
+    # Participles
+    "fatto", "fatta", "fatti", "fatte",
+    "scritto", "scritta", "scritti", "scritte",
+
+    # Adverbs
+    "sotto",
+    "adesso",
+    "appena",
+}
 
 
 # ============================================================
@@ -110,89 +138,99 @@ def transcribe_with_words(audio_path: str):
         if getattr(seg, "words", None):
             for w in seg.words:
                 if w.word.strip():
-                    words.append(
-                        {
-                            "word": w.word.strip(),
-                            "start": float(w.start or 0.0),
-                            "end": float(w.end or 0.0),
-                        }
-                    )
+                    words.append({
+                        "word": w.word.strip().lower(),
+                        "start": float(w.start or 0.0),
+                        "end": float(w.end or 0.0),
+                    })
 
     return " ".join(text_parts).strip(), words
 
 
 # ============================================================
-# -------- acoustic heuristics (MFA-free, conservative) ------
+# ------------------ Revised Heuristics ----------------------
 # ============================================================
 
-def extract_features(
+def extract_segmental_features(
     audio_path: str,
     words: List[dict],
-    level: LearnerLevel,
 ) -> List[PronunciationEvidence]:
 
     y, sr = librosa.load(audio_path, sr=None)
-    total_duration = librosa.get_duration(y=y, sr=sr)
-
     evidence: List[PronunciationEvidence] = []
 
-    # ---- Global speech rate ----
-    if len(words) >= 5:
-        rate = len(words) / max(total_duration, 0.1)
-        if rate > 3.5:
+    # ---------- GEMINATE CONSONANT HEURISTIC ----------
+    for i in range(1, len(words) - 1):
+        w = words[i]
+        if w["word"] not in GEMINATE_WORDS:
+            continue
+
+        prev_w = words[i - 1]
+        next_w = words[i + 1]
+
+        dur = w["end"] - w["start"]
+        prev_dur = prev_w["end"] - prev_w["start"]
+        next_dur = next_w["end"] - next_w["start"]
+
+        if prev_dur <= 0 or next_dur <= 0:
+            continue
+
+        local_mean = (prev_dur + next_dur) / 2
+        relative_weight = dur / local_mean if local_mean > 0 else 1.0
+
+        if relative_weight <= 1.0:
             evidence.append(
                 PronunciationEvidence(
-                    word="(overall)",
-                    feature="speech_rate",
-                    expected="steady pace",
-                    observed="rushed",
+                    word=w["word"],
+                    feature="geminate_weight",
+                    expected="more articulation through the middle",
+                    observed="too quick",
                     severity="medium",
-                    time_range=(0.0, total_duration),
+                    time_range=(w["start"], w["end"]),
                 )
             )
+            return evidence  # Only one segmental item per utterance
 
-    # ---- Word-level duration heuristics ----
-    durations = [
-        (w["word"], w["end"] - w["start"], w["start"], w["end"])
-        for w in words
-        if w["end"] > w["start"]
-    ]
+    # ---------- STRESS CLARITY HEURISTIC ----------
+    for w in words:
+        dur = w["end"] - w["start"]
+        if dur < 0.45 or w["word"] in GEMINATE_WORDS:
+            continue
 
-    if durations:
-        avg_duration = float(np.mean([d[1] for d in durations]))
+        # Slice audio into 3 equal temporal parts
+        start_idx = int(w["start"] * sr)
+        end_idx = int(w["end"] * sr)
+        segment = y[start_idx:end_idx]
 
-        for word, dur, start, end in durations:
-            if dur < 0.6 * avg_duration and len(word) >= 4:
-                evidence.append(
-                    PronunciationEvidence(
-                        word=word,
-                        feature="word_duration",
-                        expected="more held",
-                        observed="compressed",
-                        severity="medium",
-                        time_range=(start, end),
-                    )
+        if len(segment) < sr * 0.3:
+            continue
+
+        slices = np.array_split(segment, 3)
+        energies = [np.mean(np.abs(s)) for s in slices if len(s) > 0]
+
+        if len(energies) < 3:
+            continue
+
+        dominance = max(energies) / (np.mean(energies) + 1e-6)
+
+        if dominance < 1.4:
+            evidence.append(
+                PronunciationEvidence(
+                    word=w["word"],
+                    feature="stress_clarity",
+                    expected="one syllable to stand out",
+                    observed="flat",
+                    severity="low",
+                    time_range=(w["start"], w["end"]),
                 )
-
-            tail_start = int(end * sr)
-            tail = y[tail_start:tail_start + int(0.08 * sr)]
-            if tail.size > 0 and np.mean(np.abs(tail)) < 0.01:
-                evidence.append(
-                    PronunciationEvidence(
-                        word=word,
-                        feature="final_vowel",
-                        expected="clearly pronounced",
-                        observed="cut short",
-                        severity="low",
-                        time_range=(start, end),
-                    )
-                )
+            )
+            return evidence
 
     return evidence
 
 
 # ============================================================
-# ---------- Claude coaching (BULLETPROOF JSON) --------------
+# ---------- Claude coaching (bullet‑proof JSON) -------------
 # ============================================================
 
 def safe_parse_json(raw_text: str) -> dict:
@@ -206,8 +244,7 @@ def safe_parse_json(raw_text: str) -> dict:
     if start == -1 or end == -1 or end <= start:
         raise ValueError(f"No JSON found in Claude output:\n{raw}")
 
-    json_text = raw[start:end + 1]
-    return json.loads(json_text)
+    return json.loads(raw[start:end + 1])
 
 
 def claude_feedback(payload: ClaudeInputPayload) -> dict:
@@ -216,7 +253,7 @@ def claude_feedback(payload: ClaudeInputPayload) -> dict:
     system_prompt = (
         "You are a pronunciation coach for learners of Italian. "
         "You give supportive, practical feedback in English. "
-        "You never diagnose errors or use phonetic terms. "
+        "You NEVER diagnose errors or use phonetic symbols. "
         "You ONLY output valid JSON."
     )
 
@@ -237,10 +274,7 @@ Return ONLY compact JSON:
 
 Rules:
 - English only
-- Max focus points:
-  Beginner: 2
-  Intermediate: 3
-  Advanced: 2
+- Max focus points: 1
 - coaching_tip ≤ 20 words
 - If evidence is empty, say pronunciation is clear and give no focus points
 
@@ -254,7 +288,7 @@ Pronunciation evidence:
         try:
             resp = client.messages.create(
                 model=CLAUDE_MODEL,
-                max_tokens=600,
+                max_tokens=500,
                 temperature=0,
                 system=system_prompt,
                 messages=[{"role": "user", "content": user_prompt}],
@@ -307,7 +341,7 @@ if audio_path and st.button("🧠 Analyze pronunciation"):
 
     if words:
         with st.spinner("Analyzing pronunciation…"):
-            evidence = extract_features(audio_path, words, level)
+            evidence = extract_segmental_features(audio_path, words)
 
         payload = ClaudeInputPayload(level=level, evidence=evidence)
 
@@ -316,10 +350,9 @@ if audio_path and st.button("🧠 Analyze pronunciation"):
                 feedback = claude_feedback(payload)
             except Exception:
                 st.warning(
-                    "We couldn’t generate detailed feedback this time. "
+                    "We couldn’t generate feedback this time. "
                     "Please click Analyze again."
                 )
-                st.caption("This happens occasionally with AI responses.")
                 st.stop()
 
         st.subheader("Coaching feedback")
@@ -327,8 +360,8 @@ if audio_path and st.button("🧠 Analyze pronunciation"):
 
         for i, fp in enumerate(feedback.get("focus_points", []), 1):
             st.markdown(
-    f"**{i}. {fp['word']}** "
-    f"({fp['time_range'][0]:.2f}s–{fp['time_range'][1]:.2f}s)\n\n"
-    f"{fp['coaching_tip']}\n\n"
-    f"*{fp['example_hint']}*"
-        )
+                f"**{i}. {fp['word']}** "
+                f"({fp['time_range'][0]:.2f}s–{fp['time_range'][1]:.2f}s)\n\n"
+                f"{fp['coaching_tip']}\n\n"
+                f"*{fp['example_hint']}*"
+            )
