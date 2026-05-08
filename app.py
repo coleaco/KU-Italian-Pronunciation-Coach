@@ -1,6 +1,6 @@
 # ============================================================
 # Italian Pronunciation Coach — Segmental-Focused (MFA-free)
-# Geminate consonants + stress clarity
+# Geminate consonants + stress clarity + browser-based TTS
 # ============================================================
 
 import os
@@ -11,6 +11,7 @@ from typing import List, Tuple, Literal
 
 import numpy as np
 import streamlit as st
+import streamlit.components.v1 as components
 import librosa
 
 from faster_whisper import WhisperModel
@@ -113,6 +114,47 @@ def save_audio(data: bytes) -> str:
     with open(tmp.name, "wb") as f:
         f.write(data)
     return tmp.name
+
+
+# ============================================================
+# ------------------- Browser-based TTS ----------------------
+# ============================================================
+
+def tts_button(text: str, label: str = "🔊 Listen to model pronunciation"):
+    """
+    Renders a browser-based text-to-speech button using the Web Speech API.
+    """
+    components.html(
+        f"""
+        <script>
+        function speakText() {{
+            const text = {json.dumps(text)};
+            if ('speechSynthesis' in window) {{
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.lang = 'it-IT';
+                utterance.rate = 0.9;   // slightly slower for clarity
+                utterance.pitch = 1.0;
+                window.speechSynthesis.cancel();
+                window.speechSynthesis.speak(utterance);
+            }} else {{
+                alert("Text-to-speech is not supported in this browser.");
+            }}
+        }}
+        </script>
+
+        <button onclick="speakText()" style="
+            padding: 0.5em 0.9em;
+            font-size: 0.9em;
+            border-radius: 6px;
+            border: 1px solid #ccc;
+            background-color: #f7f7f7;
+            cursor: pointer;
+        ">
+            {label}
+        </button>
+        """,
+        height=65,
+    )
 
 
 # ============================================================
@@ -289,8 +331,13 @@ if rec and rec.get("bytes"):
 
     if st.button("🧠 Analyze pronunciation"):
         text, words = transcribe_with_words(audio_path)
+
         st.subheader("Transcription")
         st.write(text)
+
+        # 🔊 TTS button
+        if text:
+            tts_button(text)
 
         evidence = extract_segmental_features(audio_path, words)
         payload = ClaudeInputPayload(level=level, evidence=evidence)
